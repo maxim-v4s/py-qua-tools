@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 import shutil
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Union, List
 import warnings
 
 from .data_processors import DEFAULT_DATA_PROCESSORS, DataProcessor
@@ -142,6 +142,7 @@ class DataHandler:
         idx: Optional[int] = None,
         created_at: Optional[datetime] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        parent_idxs: Optional[Union[int, List[int]]] = None,
     ) -> Dict[str, Any]:
         """Generate the contents of the node.json file, which contains all node-related metadata.
 
@@ -152,6 +153,8 @@ class DataHandler:
         :param metadata: The user-specified metadata associated with the data. "name" and "data_path" are added to
         this metadata.
         :type metadata: any, optional
+        :param parent_idxs: indexes of parents.
+            Set `<current_node_idx> - 1` if not specified
         :return: The contents of the node.json file.
         :rtype: dict
         """
@@ -162,7 +165,10 @@ class DataHandler:
                 created_at = self.path_properties["created_at"]
 
         if idx is None:
-            latest_folder_properties = get_latest_data_folder(self.root_data_folder, folder_pattern=self.folder_pattern)
+            latest_folder_properties = get_latest_data_folder(
+                self.root_data_folder,
+                folder_pattern=self.folder_pattern
+            )
             idx = latest_folder_properties["idx"] + 1 if latest_folder_properties is not None else 1
         if created_at is None:
             created_at = datetime.now()
@@ -173,13 +179,19 @@ class DataHandler:
         metadata["data_path"] = generate_data_folder_relative_pathname(
             idx=idx, name=self.name, created_at=created_at, folder_pattern=self.folder_pattern
         )
+        if parent_idxs is None:
+            parents = ([idx - 1] if idx > 1 else [])
+        else:
+            parents = (
+                [parent_idxs] if isinstance(parent_idxs, list) else parent_idxs
+            )
 
         return {
             "created_at": created_at.astimezone().isoformat(timespec="seconds"),
             "metadata": metadata,
             "data": self.node_data,  # TODO Add self.node_data
             "id": idx,
-            "parents": [idx - 1] if idx > 1 else [],
+            "parents": parents,
         }
 
     def create_data_folder(
