@@ -10,10 +10,18 @@ import re
 from datetime import datetime
 
 
-__all__ = ["DEFAULT_FOLDER_PATTERN", "extract_data_folder_properties", "get_latest_data_folder", "create_data_folder"]
+__all__ = [
+    "DEFAULT_FOLDER_PATTERN",
+    "extract_data_folder_properties",
+    "get_latest_data_folder",
+    "create_data_folder",
+]
 
+
+FolderProperties = Dict[str, Union[str, int, Path]]
 
 DEFAULT_FOLDER_PATTERN = "%Y-%m-%d/#{idx}_{name}_%H%M%S"
+NESTED_FOLDER_PATTERN = "%Y-%m-%d/**/#{idx}_{name}_%H%M%S"
 
 
 def _validate_datetime(datetime_str: str, datetime_format: str) -> bool:
@@ -56,6 +64,7 @@ def extract_data_folder_properties(
     pattern = pattern.replace("%H", r"(?P<hour>\d{2})")
     pattern = pattern.replace("%M", r"(?P<minute>\d{2})")
     pattern = pattern.replace("%S", r"(?P<second>\d{2})")
+    pattern = pattern.replace("/**", r"(?P<subpath>(/#\d+_\w+_\d{6})*)")
 
     data_folder = Path(data_folder)
     if root_data_folder is not None:
@@ -82,12 +91,37 @@ def extract_data_folder_properties(
     return properties
 
 
+def _cmp_props(prop_1: FolderProperties, prop_2: FolderProperties) -> bool:
+    return prop_1["idx"] > prop_2["idx"]
+
+
+def get_node_with_max_id_by_current_folder_patter(
+    root_data_folder: Path,
+    folder_pattern: str,
+    relative_path: Path,
+    current_folder_pattern: str,
+    max_folder_prop: FolderProperties
+) -> FolderProperties:
+    new_folder_prop = get_latest_data_folder(
+        root_data_folder,
+        folder_pattern=folder_pattern,
+        current_folder_pattern=current_folder_pattern,
+        relative_path=relative_path,
+    )
+    if (
+        new_folder_prop is not None
+        and _cmp_props(new_folder_prop, max_folder_prop)
+    ):
+        return new_folder_prop
+    return max_folder_prop
+
+
 def get_latest_data_folder(
     root_data_folder: Path,
     folder_pattern: str = DEFAULT_FOLDER_PATTERN,
     relative_path: Path = Path("."),
     current_folder_pattern: str = None,
-) -> Optional[Dict[str, Union[str, int]]]:
+) -> Optional[FolderProperties]:
     """Get the latest data folder in a given root data folder.
 
     Typically this is the folder within a date folder with the highest index.
@@ -137,12 +171,42 @@ def get_latest_data_folder(
         return latest_properties
     elif "{idx}" in current_folder_pattern:
         raise ValueError("The folder pattern must only contain '{idx}' in the last part.")
+    elif current_folder_pattern == "**":
+        folders = filter(lambda f: f.is_dir(), folder_path.iterdir())
+        max_properties = {"idx": -1}
+        for folder in folders:
+            common_args = {
+                "root_data_folder": root_data_folder,
+                "folder_pattern": folder_pattern,
+            }
+            max_properties = get_node_with_max_id_by_current_folder_patter(
+                **common_args,
+                relative_path=relative_path,
+                current_folder_pattern=remaining_folder_pattern[0],
+                max_folder_prop=max_properties,
+            )
+            max_properties = get_node_with_max_id_by_current_folder_patter(
+                **common_args,
+                relative_path=relative_path / folder.name,
+                current_folder_pattern="/".join([current_folder_pattern, *remaining_folder_pattern]),
+                max_folder_prop=max_properties,
+            )
+            max_properties = get_node_with_max_id_by_current_folder_patter(
+                **common_args,
+                relative_path=relative_path / folder.name,
+                current_folder_pattern=remaining_folder_pattern[0],
+                max_folder_prop=max_properties,
+            )
+        if max_properties["idx"] == -1:
+            return None
+        return max_properties
     else:
         # Filter out elements that aren't folders
         folders = filter(lambda f: f.is_dir(), folder_path.iterdir())
         # Filter folders that match the datetime of the current folder pattern
         folders = filter(lambda f: _validate_datetime(f.name, current_folder_pattern), folders)
 
+        # TODO: This check has no logic; Here is checked that filter object isn't exist (always false);
         if not folders:
             return None
 
